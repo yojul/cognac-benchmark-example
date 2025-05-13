@@ -1,0 +1,6 @@
+cognac
+gymnasium
+numpy
+stable-baselines3
+torch
+tyro
