@@ -6,24 +6,6 @@
 
 ---
 
-## Table of Contents
-
-* [Features](#features)
-* [Getting Started](#getting-started)
-
-  * [Prerequisites](#prerequisites)
-  * [Installation](#installation)
-* [Usage](#usage)
-
-  * [Running Experiments](#running-experiments)
-  * [Example](#example)
-* [Project Structure](#project-structure)
-* [Contributing](#contributing)
-* [License](#license)
-* [Contact](#contact)
-
----
-
 ## Features
 
 * **Lightweight**: Minimal dependencies for quick setup.
