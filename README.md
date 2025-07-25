@@ -57,8 +57,10 @@ python algos/benchmark_ippo.py
 ├── algos/                # MARL algorithm implementations and benchmark scripts
 │   ├── benchmark_centralized_ppo.py  # Centralized Proximal Policy Optimization, used as a baselines.
 │   ├── benchmark_idqn.py             # Simple Independent Deep Q-Learning
+│   ├── benchmark_ippo.py             # Simple Independent Proximal Policy Optimization
 │   ├── benchmark_ippo_continuous.py  # Simple Independent Proximal Policy Optimization handling continuous action space (use for Multi-commodity flow problem)
-│   └── benchmark_ippo.py             # Simple Independent Proximal Policy Optimization
+│   ├── benchmark_mappo.py            # Multi-Agent PPO algorithm introduced by (Yu & al., 2022)
+│   └── benchmark_qmix.py             # Q-Mix algorithm introduced by (Rashid & al., 2018)
 ├── requirements.txt      # Python dependencies
 ├── LICENSE.txt           # Apache-2.0 License
 └── README.md             # Project overview and instructions
