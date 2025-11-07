@@ -48,16 +48,18 @@ class Args:
     env_id: str = "binary_consensus"
     """the id of the environment"""
     adjacency_matrix_path = os.path.join(
-        os.path.dirname(__file__), "env_assets", "basic_undirected_network_10.npy"
+        os.path.dirname(__file__), "env_assets", "basic_directed_network_100.npy"
     )
+    """additionnal params for env instanciation"""
+    additional_env_params = {"max_steps": 100}
     """path to the adjacency matrix for the env - if relevant"""
-    total_timesteps: int = 50000000
+    total_timesteps: int = 10_000_0000
     """total timesteps of the experiments"""
-    learning_rate: float = 2.5e-4
+    learning_rate: float = 1e-4
     """the learning rate of the optimizer"""
     num_envs: int = 1
     """the number of parallel game environments"""
-    num_steps: int = 128
+    num_steps: int = 1024
     """the number of steps to run in each environment per policy rollout"""
     anneal_lr: bool = True
     """Toggle learning rate annealing for policy and value networks"""
@@ -65,19 +67,19 @@ class Args:
     """the discount factor gamma"""
     gae_lambda: float = 0.95
     """the lambda for the general advantage estimation"""
-    num_minibatches: int = 4
+    num_minibatches: int = 8
     """the number of mini-batches"""
     update_epochs: int = 4
     """the K epochs to update the policy"""
     norm_adv: bool = True
     """Toggles advantages normalization"""
-    clip_coef: float = 0.2
+    clip_coef: float = 0.1
     """the surrogate clipping coefficient"""
     clip_vloss: bool = True
     """Toggles whether or not to use a clipped loss for the value function, as per the paper."""
-    ent_coef: float = 0.01
+    ent_coef: float = 0.05
     """coefficient of the entropy"""
-    vf_coef: float = 0.5
+    vf_coef: float = 0.1
     """coefficient of the value function"""
     max_grad_norm: float = 0.5
     """the maximum norm for the gradient clipping"""
@@ -186,6 +188,8 @@ if __name__ == "__main__":
     config = {}
     if isinstance(args.adjacency_matrix_path, str):
         config["adjacency_matrix"] = np.load(args.adjacency_matrix_path)
+    if isinstance(args.additional_env_params, dict):
+        config.update(args.additional_env_params)
 
     env = make_env(args.env_id, **config)
     obs_space = [
@@ -206,14 +210,24 @@ if __name__ == "__main__":
     ]
 
     _, _ = env.reset()  # Ensure that the state is initiated
-    agent = Agent(env.state().shape[0], env.n_agents).to(device)
-    optimizers = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
+    agent = Agent(np.prod(env.state().shape), env.n_agents).to(device)
+    # optimizers = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
+    optimizers = torch.optim.Adam(
+        [
+            {"params": agent.actor.parameters(), "lr": args.learning_rate, "eps": 1e-5},
+            {
+                "params": agent.critic.parameters(),
+                "lr": args.learning_rate,
+                "eps": 1e-5,
+            },
+        ],
+    )
 
     # ==== STORAGE: one buffer per agent ====
     storage = {
-        "obs": torch.zeros(args.num_steps, args.num_envs, env.state().shape[0]).to(
-            device
-        ),
+        "obs": torch.zeros(
+            (args.num_steps, args.num_envs, np.prod(env.state().shape))
+        ).to(device),
         "actions": torch.zeros(args.num_steps, env.n_agents, args.num_envs).to(device),
         "logps": torch.zeros(args.num_steps, args.num_envs).to(device),
         "rews": torch.zeros(args.num_steps, args.num_envs).to(device),
@@ -226,7 +240,7 @@ if __name__ == "__main__":
     # reset returns a dict of agent→obs arrays of shape (num_envs, *obs_shape)
     next_obs_dict, _ = env.reset(seed=args.seed)
     # convert to per-agent tensors
-    next_obs = torch.tensor(env.state(), dtype=torch.float32).to(device)
+    next_obs = torch.flatten(torch.tensor(env.state(), dtype=torch.float32)).to(device)
     next_done = torch.zeros(args.num_envs, dtype=torch.float32).to(device)
 
     total_rew = 0
@@ -263,12 +277,14 @@ if __name__ == "__main__":
             total_rew += sum(rews_d.values())
             # unpack
             storage["rews"][t] = sum(rews_d.values())
-            next_obs = torch.tensor(env.state(), dtype=torch.float32)
+            next_obs = torch.flatten(torch.tensor(env.state(), dtype=torch.float32))
             next_done = any(terms_d.values()) or any(truncs_d.values())
 
             if next_done:
                 init_obs, _ = env.reset()
-                next_obs = torch.tensor(env.state(), dtype=torch.float32).to(device)
+                next_obs = torch.flatten(
+                    torch.tensor(env.state(), dtype=torch.float32)
+                ).to(device)
                 next_done = False
                 writer.add_scalar(
                     "global_measure/episodic_return", total_rew, global_step
@@ -296,8 +312,8 @@ if __name__ == "__main__":
         ret = adv + buf["vals"]
 
         # flatten
-        b_obs = buf["obs"].reshape(-1, env.state().shape[0])
-        b_acts = buf["actions"].reshape(-1, env.state().shape[0])
+        b_obs = buf["obs"].reshape(-1, np.prod(env.state().shape))
+        b_acts = buf["actions"].reshape(-1, env.n_agents)
         b_logps = buf["logps"].reshape(-1)
         b_adv = adv.reshape(-1)
         b_ret = ret.reshape(-1)

@@ -5,6 +5,7 @@ import os
 import random
 import time
 from dataclasses import dataclass
+from collections import deque
 
 import numpy as np
 import torch
@@ -44,19 +45,22 @@ class Args:
     """the user or org name of the model repository from the Hugging Face Hub"""
 
     # Algorithm specific arguments
-    env_id: str = "binary_consensus"
+    env_id: str = "binary_consensus"  # "grid_firefighting_graph" "sysadmin_network"
     """the id of the environment"""
     adjacency_matrix_path = os.path.join(
-        os.path.dirname(__file__), "env_assets", "basic_undirected_network_10.npy"
+        os.path.dirname(__file__), "env_assets", "basic_directed_network_100.npy"
     )
     """path to the adjacency matrix for the env - if relevant"""
-    total_timesteps: int = 5000000
+    additional_env_params = {"max_steps": 100}
+    # {"n": 10000}  # {"n_width": 10, "n_height": 10}
+    """additionnal params for env instanciation"""
+    total_timesteps: int = 10_000_000
     """total timesteps of the experiments"""
-    learning_rate: float = 2.5e-4
+    learning_rate: float = 5e-4
     """the learning rate of the optimizer"""
     num_envs: int = 1
     """the number of parallel game environments"""
-    num_steps: int = 128
+    num_steps: int = 1024
     """the number of steps to run in each environment per policy rollout"""
     anneal_lr: bool = True
     """Toggle learning rate annealing for policy and value networks"""
@@ -72,9 +76,9 @@ class Args:
     """Toggles advantages normalization"""
     clip_coef: float = 0.2
     """the surrogate clipping coefficient"""
-    clip_vloss: bool = True
+    clip_vloss: bool = False
     """Toggles whether or not to use a clipped loss for the value function, as per the paper."""
-    ent_coef: float = 0.01
+    ent_coef: float = 0.02
     """coefficient of the entropy"""
     vf_coef: float = 0.5
     """coefficient of the value function"""
@@ -103,16 +107,16 @@ class Agent(nn.Module):
         super().__init__()
         self.critic = nn.Sequential(
             layer_init(nn.Linear(int(np.prod(obs_shape)), 64)),
-            nn.Tanh(),
+            nn.ReLU(),
             layer_init(nn.Linear(64, 64)),
-            nn.Tanh(),
+            nn.ReLU(),
             layer_init(nn.Linear(64, 1), std=1.0),
         )
         self.actor = nn.Sequential(
             layer_init(nn.Linear(int(np.prod(obs_shape)), 64)),
-            nn.Tanh(),
+            nn.ReLU(),
             layer_init(nn.Linear(64, 64)),
-            nn.Tanh(),
+            nn.ReLU(),
             layer_init(nn.Linear(64, act_dim), std=0.01),
         )
 
@@ -166,6 +170,10 @@ if __name__ == "__main__":
     config = {}
     if isinstance(args.adjacency_matrix_path, str):
         config["adjacency_matrix"] = np.load(args.adjacency_matrix_path)
+        print(config["adjacency_matrix"])
+    if isinstance(args.additional_env_params, dict):
+        config.update(args.additional_env_params)
+        print(config)
 
     env = make_env(args.env_id, **config)
     obs_space = [
@@ -224,6 +232,7 @@ if __name__ == "__main__":
 
     total_rew = 0
     for it in range(1, args.num_iterations + 1):
+        filling_buffer = time.time()
         # optional LR annealing
         if args.anneal_lr:
             frac = 1 - (it - 1) / args.num_iterations
@@ -251,7 +260,11 @@ if __name__ == "__main__":
 
             # step environment
             nxt_obs_d, rews_d, terms_d, truncs_d, infos = env.step(actions_dict)
+            # print(nxt_obs_d)
             total_rew += sum(rews_d.values())
+            global_done = any(
+                (bool(terms_d[a] or truncs_d[a]) for a in env.possible_agents)
+            )
             # unpack
             for agent_name in env.possible_agents:
                 rew = torch.tensor(rews_d[agent_name], dtype=torch.float32).to(device)
@@ -265,7 +278,7 @@ if __name__ == "__main__":
                 next_obs[agent_name] = obs_i
                 next_done[agent_name] = done
 
-            if done:
+            if global_done:
                 init_obs, _ = env.reset()
                 next_obs = {
                     agent_name: torch.tensor(
@@ -275,11 +288,14 @@ if __name__ == "__main__":
                 }
                 next_done = {agent_name: False for agent_name in env.possible_agents}
                 writer.add_scalar(
-                    "global_measure/episodic_return", total_rew, global_step
+                    "global_measure/episodic_return",
+                    total_rew,
+                    global_step,
                 )
                 total_rew = 0
             # (optional) log episode metrics from infos["final_info"]…
-
+        print(f"fillling buffer {time.time()-filling_buffer}")
+        train = time.time()
         # === COMPUTE ADVANTAGES & RETURNS & OPTIMIZE ===
         for i, (agent_name, agent) in enumerate(zip(env.possible_agents, agents)):
             buf = storage[agent_name]
@@ -375,11 +391,10 @@ if __name__ == "__main__":
                 explained_var,
                 global_step,
             )
-
         # reset storage for next iteration
         for buf in storage.values():
             for key in buf:
                 buf[key].zero_()
-
+        print(f"train {time.time() - train}")
     env.close()
     writer.close()

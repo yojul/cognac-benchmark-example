@@ -32,7 +32,7 @@ class Args:
     """if toggled, cuda will be enabled by default"""
     track: bool = True
     """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "COGNAC-benchmark"
+    wandb_project_name: str = "COGNAC-benchmark-final"
     """the wandb's project name"""
     wandb_entity: str = None
     """the entity (team) of wandb's project"""
@@ -46,35 +46,40 @@ class Args:
     """the user or org name of the model repository from the Hugging Face Hub"""
 
     # Algorithm specific arguments
-    env_id: str = "grid_firefighting_graph"
+    # Algorithm specific arguments
+    env_id: str = "sysadmin_network"  # "grid_firefighting_graph" "binary_consensus"
     """the id of the environment"""
-    adjacency_matrix_path = None  # os.path.join(os.path.dirname(__file__), "env_assets", "basic_undirected_network_10.npy")
+    adjacency_matrix_path = os.path.join(
+        os.path.dirname(__file__), "env_assets", "basic_directed_network_100.npy"
+    )
     """path to the adjacency matrix for the env - if relevant"""
-    total_timesteps: int = 500000
+    additional_env_params = {"max_steps": 100}
+    """additionnal params for env instanciation"""
+    total_timesteps: int = 5_000_000
     """total timesteps of the experiments"""
-    learning_rate: float = 2.5e-4
+    learning_rate: float = 5e-3  # 5e-4
     """the learning rate of the optimizer"""
     num_envs: int = 1
     """the number of parallel game environments"""
     buffer_size: int = 10000
     """the replay memory buffer size"""
-    gamma: float = 0.99
+    gamma: float = 0.95
     """the discount factor gamma"""
-    tau: float = 1.0
+    tau: float = 0.5
     """the target network update rate"""
-    target_network_frequency: int = 500
+    target_network_frequency: int = 100
     """the timesteps it takes to update the target network"""
-    batch_size: int = 128
+    batch_size: int = 256
     """the batch size of sample from the reply memory"""
     start_e: float = 1
     """the starting epsilon for exploration"""
-    end_e: float = 0.05
+    end_e: float = 0.005
     """the ending epsilon for exploration"""
-    exploration_fraction: float = 0.5
+    exploration_fraction: float = 0.1
     """the fraction of `total-timesteps` it takes from start-e to go end-e"""
     learning_starts: int = 10000
     """timestep to start learning"""
-    train_frequency: int = 10
+    train_frequency: int = 5
     """the frequency of training"""
 
 
@@ -135,6 +140,8 @@ if __name__ == "__main__":
     if isinstance(args.adjacency_matrix_path, str):
         config["adjacency_matrix"] = np.load(args.adjacency_matrix_path)
 
+    if isinstance(args.additional_env_params, dict):
+        config.update(args.additional_env_params)
     env = make_env(args.env_id, **config)
     obs_space = [
         (
@@ -172,7 +179,6 @@ if __name__ == "__main__":
         agent["q_target"].load_state_dict(agent["q_network"].state_dict())
         for agent in agents
     ]
-
     rb = [
         ReplayBuffer(
             args.buffer_size,
@@ -212,19 +218,6 @@ if __name__ == "__main__":
         # TRY NOT TO MODIFY: execute the game and log data.
         next_obs, rewards, terminations, truncations, infos = env.step(actions)
         episodic_return += sum(rewards.values())
-        # TRY NOT TO MODIFY: record rewards for plotting purposes
-        # if "final_info" in infos:
-        #     for info in infos["final_info"]:
-        #         if info and "episode" in info:
-        #             # print(
-        #             #     f"global_step={global_step}, episodic_return={info['episode']['r']}"
-        #             # )
-        #             writer.add_scalar(
-        #                 "charts/episodic_return", info["episode"]["r"], global_step
-        #             )
-        #             writer.add_scalar(
-        #                 "charts/episodic_length", info["episode"]["l"], global_step
-        #             )
 
         # TRY NOT TO MODIFY: save data to reply buffer; handle `final_observation`
         real_next_obs = next_obs
@@ -248,7 +241,6 @@ if __name__ == "__main__":
 
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
         obs = next_obs
-
         for i, (agent, optimizer) in enumerate(zip(agents, optimizers)):
             # ALGO LOGIC: training.
             if global_step > args.learning_starts:
@@ -279,12 +271,6 @@ if __name__ == "__main__":
                             old_val.mean().item(),
                             global_step,
                         )
-                        # print("SPS:", int(global_step / (time.time() - start_time)))
-                        # writer.add_scalar(
-                        #     f"charts/agent_{i}/SPS",
-                        #     int(global_step / (time.time() - start_time)),
-                        #     global_step,
-                        # )
 
                     # optimize the model
                     optimizer.zero_grad()

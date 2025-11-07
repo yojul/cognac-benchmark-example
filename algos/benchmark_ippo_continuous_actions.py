@@ -183,12 +183,17 @@ if __name__ == "__main__":
     obs_space = [
         (
             env.observation_space(agent).shape[0]
+            * env.observation_space(agent).shape[1]
             if isinstance(env.observation_space(agent), MultiDiscrete)
             else 1
         )
         for agent in env.possible_agents
     ]
-    act_space = [env.action_space(agent).shape[0] for agent in env.possible_agents]
+
+    act_space = [
+        env.action_space(agent).shape[0] * env.action_space(agent).shape[1]
+        for agent in env.possible_agents
+    ]
 
     agents = [
         Agent(obs_space[j], act_space[j]).to(device)
@@ -219,9 +224,9 @@ if __name__ == "__main__":
     next_obs_dict, _ = env.reset(seed=args.seed)
     # convert to per-agent tensors
     next_obs = {
-        agent_name: torch.tensor(next_obs_dict[agent_name], dtype=torch.float32).to(
-            device
-        )
+        agent_name: torch.flatten(
+            torch.tensor(next_obs_dict[agent_name], dtype=torch.float32)
+        ).to(device)
         for agent_name in env.possible_agents
     }
     next_done = {
@@ -254,7 +259,16 @@ if __name__ == "__main__":
                     storage[agent_name]["actions"][t] = a
                     storage[agent_name]["logps"][t] = logp
                     storage[agent_name]["vals"][t] = val.view(-1)
-                    actions_dict[agent_name] = a.cpu().numpy()
+                    actions_dict[agent_name] = (
+                        a.reshape(
+                            (
+                                env.action_space(agent_name).shape[0],
+                                env.action_space(agent_name).shape[1],
+                            )
+                        )
+                        .cpu()
+                        .numpy()
+                    )
             # step environment
             nxt_obs_d, rews_d, terms_d, truncs_d, infos = env.step(actions_dict)
             total_rew += sum(rews_d.values())
@@ -264,8 +278,8 @@ if __name__ == "__main__":
                 done = torch.tensor(
                     terms_d[agent_name] | truncs_d[agent_name], dtype=torch.float32
                 ).to(device)
-                obs_i = torch.tensor(nxt_obs_d[agent_name], dtype=torch.float32).to(
-                    device
+                obs_i = torch.flatten(
+                    torch.tensor(nxt_obs_d[agent_name], dtype=torch.float32).to(device)
                 )
                 storage[agent_name]["rews"][t] = rew
                 next_obs[agent_name] = obs_i
@@ -274,8 +288,8 @@ if __name__ == "__main__":
             if done:
                 init_obs, _ = env.reset()
                 next_obs = {
-                    agent_name: torch.tensor(
-                        init_obs[agent_name], dtype=torch.float32
+                    agent_name: torch.flatten(
+                        torch.tensor(init_obs[agent_name], dtype=torch.float32)
                     ).to(device)
                     for agent_name in env.possible_agents
                 }

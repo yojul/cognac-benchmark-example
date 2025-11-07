@@ -26,13 +26,13 @@ class Args:
     """seed of the experiment"""
     torch_deterministic: bool = True
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
-    cuda: bool = True
+    cuda: bool = False
     """if toggled, cuda will be enabled by default"""
     track: bool = True
     """if toggled, this experiment will be tracked with Weights and Biases"""
     debug_log: bool = False
     """if toggled, will log all power outputs and yaws step by step"""
-    wandb_project_name: str = "COGNAC-benchmark"
+    wandb_project_name: str = "COGNAC-benchmark-final"
     """the wandb's project name"""
     wandb_entity: str = None
     """the entity (team) of wandb's project"""
@@ -40,58 +40,55 @@ class Args:
     """whether to save model into the `runs/{run_name}` folder"""
 
     # Algorithm specific arguments
-    env_id: str = "sysadmin_network"  # "grid_firefighting_graph"
+    env_id: str = (
+        "sysadmin_network"  # "binary_consensus"  # "grid_firefighting_graph" "sysadmin_network"
+    )
     """the id of the environment"""
     adjacency_matrix_path = os.path.join(
-        os.path.dirname(__file__), "env_assets", "basic_undirected_network_10.npy"
+        os.path.dirname(__file__), "env_assets", "basic_directed_network_10.npy"
     )
     """path to the adjacency matrix for the env - if relevant"""
-    additional_env_params = {"max_steps": 10}
+    additional_env_params = {"max_steps": 100}
     """additionnal params for env instanciation"""
     total_timesteps: int = int(5e6)
     """total timesteps of the experiments"""
-    learning_rate: float = 3e-4  # 7e-4 #
+    learning_rate: float = 1e-4  # 7e-4 #
     """the learning rate of the optimizer"""
     gamma: float = 0.99
     """the discount factor gamma"""
-    gae_lambda: float = 0.95  # 0
+    gae_lambda: float = 0.9  # 0
     """the lambda for the general advantage estimation"""
-    num_minibatches: int = 32
+    num_minibatches: int = 8
     """the number of mini-batches"""
-    update_epochs: int = 5
+    update_epochs: int = 3
     """the K epochs to update the policy"""
     norm_adv: bool = True
     """Toggles advantages normalization"""
-    clip_coef: float = 0.01
+    clip_coef: float = 0.2
     """the surrogate clipping coefficient"""
     clip_vloss: bool = True
     """Toggles whether or not to use a clipped loss for the value function, as per the paper."""
-    ent_coef: float = 0.05  # 0
+    ent_coef: float = 0.04  # 0
     """coefficient of the entropy"""
     vf_coef: float = 0.5
     """coefficient of the value function"""
     max_grad_norm: float = 0.5
     """the maximum norm for the gradient clipping"""
-    hidden_layer_nn: Union[bool, Union[bool, tuple[int, ...]]] = (64, 64)
+    hidden_layer_nn: Union[bool, Union[bool, tuple[int, ...]]] = (32, 32)
     """number of neurons in hidden layer"""
-    num_steps: int = 2048
-    """number of available rewards before update"""
-    anneal_lr: bool = False
+    anneal_lr: bool = True
     """Toggle learning rate annealing for policy and value networks"""
-    freq_eval: int = 5
-    """Number of iterations between eval"""
-    buffer_size: int = 1
+    buffer_size: int = 8
     """the replay memory buffer size"""
 
     # to be filled in runtime
-    batch_size: int = 32
+    batch_size: int = 0
     """the batch size (computed in runtime)"""
-    minibatch_size: int = 32
+    minibatch_size: int = 0
     """the mini-batch size (computed in runtime)"""
     num_iterations: int = 0
     """the number of iterations (computed in runtime)"""
     device: str = "cpu"
-    "device"
 
 
 class EpisodicBuffer:
@@ -231,7 +228,7 @@ class SharedCritic(nn.Module):
     def __init__(self, state_dim, hidden_layers):
         super().__init__()
         self.state_dim = state_dim
-        input_layers = [state_dim] + list(hidden_layers)
+        input_layers = [state_dim] + list([256, 256])
         self.critic = nn.Sequential(
             *[
                 nn.Sequential(layer_init(nn.Linear(in_dim, out_dim)), nn.Tanh())
@@ -274,6 +271,7 @@ class Agent(nn.Module):
 
 
 if __name__ == "__main__":
+    init_phase = time.time()
     args = tyro.cli(Args)
 
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
@@ -302,7 +300,7 @@ if __name__ == "__main__":
     torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
-    device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+    device = torch.device("cpu")
     lr_update_cnt = 0
     # environment and agents
     config = {}
@@ -331,7 +329,7 @@ if __name__ == "__main__":
         for agent in agents
     ]
     critic_optimizer = optim.Adam(
-        shared_critic.parameters(), lr=args.learning_rate, eps=1e-5
+        shared_critic.parameters(), lr=args.learning_rate / 10, eps=1e-5
     )
 
     # Instantiate Buffer
@@ -353,11 +351,13 @@ if __name__ == "__main__":
         returns = advantages + values
         return advantages, returns
 
+    print(f"initialization {time.time() - init_phase}")
     global_step = 0
+    filling_buffer = time.time()
     while global_step < args.total_timesteps:
         buffer.reset_ep_buffer()
         start_time = time.time()
-        obs, _ = env.reset(seed=args.seed)
+        obs, _ = env.reset()
         episodic_return = 0
         for step in range(env.max_steps):
             with torch.no_grad():
@@ -366,7 +366,7 @@ if __name__ == "__main__":
                     obs_tensor = torch.tensor(
                         obs[agent], dtype=torch.float32, device=device
                     )
-                    action, logprob, _ = agents[i].get_action(obs_tensor.unsqueeze(0))
+                    action, logprob, _ = agents[i].get_action(obs_tensor)
                     actions[agent] = action.squeeze(0).cpu().numpy()
                     logprobs[agent] = logprob.cpu().numpy()
 
@@ -386,148 +386,163 @@ if __name__ == "__main__":
 
             if all(dones.values()):
                 writer.add_scalar(
-                    "global_measure/episodic_return", episodic_return, global_step
+                    "global_measure/episodic_return",
+                    episodic_return,
+                    global_step,
                 )
                 episodic_return = 0
                 break
 
         buffer.store_ep_data()
-        # ----------------------------------
-        # Sample trajectories
-        obs_batch, next_obs_batch, act_batch, rew_batch, done_batch, state_batch = (
-            buffer.sample(args.buffer_size)
-        )
-        # TRAINING LOOP STARTS HERE
-        # ==================================
-        # Convert numpy batches to tensors
-        device = shared_critic.critic[0][0].weight.device  # ensure consistency
-        obs_b = {
-            agent: torch.tensor(
-                obs_batch[agent], dtype=torch.float32, device=device
-            ).reshape(-1, agents[0].observation_dim)
-            for agent in env.possible_agents
-        }
-        acts_b = {
-            agent: torch.tensor(
-                act_batch[agent], dtype=torch.long, device=device
-            ).flatten()
-            for agent in env.possible_agents
-        }
-        rews_b = {
-            agent: torch.tensor(rew_batch[agent], dtype=torch.float32, device=device)
-            for agent in env.possible_agents
-        }
-        dones_b = {
-            agent: torch.tensor(done_batch[agent], dtype=torch.float32, device=device)
-            for agent in env.possible_agents
-        }
-        states = torch.tensor(state_batch, dtype=torch.float32, device=device).reshape(
-            -1, state_dim
-        )
-
-        # Compute values for all timesteps
-        with torch.no_grad():
-            values = shared_critic.get_value(states).reshape(
-                args.buffer_size, -1
-            )  # (B, T)
-            next_states = states[1:].reshape(args.buffer_size, -1, state_dim)
-            next_values = torch.cat(
-                [values[:, 1:], torch.zeros_like(values[:, :1])], dim=1
+        if buffer.full:
+            print(f"filling_buffer {time.time() - filling_buffer}")
+            epoch_time = time.time()
+            # ----------------------------------
+            # Sample trajectories
+            obs_batch, next_obs_batch, act_batch, rew_batch, done_batch, state_batch = (
+                buffer.sample(args.buffer_size)
             )
-
-        # Compute advantages and returns per agent
-        advantages = {}
-        returns = {}
-        for agent in env.possible_agents:
-            adv, ret = compute_gae(
-                rews_b[agent].reshape(args.buffer_size, -1),
-                dones_b[agent].reshape(args.buffer_size, -1),
-                values,
-                next_values,
-                args.gamma,
-                args.gae_lambda,
-            )
-            if args.norm_adv:
-                adv = (adv - adv.mean()) / (adv.std(unbiased=False) + 1e-8)
-            advantages[agent] = adv.reshape(-1)
-            returns[agent] = ret.reshape(-1)
-
-        # Prepare old logprobs
-        with torch.no_grad():
-            old_logprobs = {}
-            for i, agent in enumerate(env.possible_agents):
-                logits = agents[i](obs_b[agent])
-                dist = Categorical(logits=logits)
-                old_logprobs[agent] = dist.log_prob(acts_b[agent])
-
-        # Flatten all experiences: already flattened via reshape above
-        total_samples = args.buffer_size * env.max_steps
-        minibatch_size = total_samples // args.num_minibatches
-
-        # KL annealing LR scheduler (if desired)
-        if args.anneal_lr:
-            frac = 1.0 - (global_step / args.total_timesteps)
-            lr_now = args.learning_rate * frac
-            for opt in actor_optimizers + [critic_optimizer]:
-                for pg in opt.param_groups:
-                    pg["lr"] = lr_now
-
-        for _ in range(args.update_epochs):
-            # generate shuffled indices
-            idxs = torch.randperm(total_samples)
-            for start in range(0, total_samples, minibatch_size):
-                mb_idx = idxs[start : start + minibatch_size]
-                # Critic update
-                mb_states = states[mb_idx]
-                mb_returns = (
-                    torch.stack(
-                        [returns[agent][mb_idx] for agent in env.possible_agents]
-                    )
-                    .mean(dim=0, keepdim=True)
-                    .squeeze()
+            # TRAINING LOOP STARTS HERE
+            # ==================================
+            # Convert numpy batches to tensors
+            device = shared_critic.critic[0][0].weight.device  # ensure consistency
+            obs_b = {
+                agent: torch.tensor(
+                    obs_batch[agent], dtype=torch.float32, device=device
+                ).reshape(-1, agents[agent].observation_dim)
+                for agent in env.possible_agents
+            }
+            acts_b = {
+                agent: torch.tensor(
+                    act_batch[agent], dtype=torch.long, device=device
+                ).flatten()
+                for agent in env.possible_agents
+            }
+            rews_b = {
+                agent: torch.tensor(
+                    rew_batch[agent], dtype=torch.float32, device=device
                 )
-                mb_values = shared_critic.get_value(mb_states).squeeze()
-                v_loss_unclipped = F.mse_loss(mb_values, mb_returns)
-                if args.clip_vloss:
-                    v_clipped = values.reshape(-1)[mb_idx] + torch.clamp(
-                        mb_values - values.reshape(-1)[mb_idx],
-                        -args.clip_coef,
-                        args.clip_coef,
-                    )
-                    v_loss_clipped = F.mse_loss(v_clipped, mb_returns)
-                    v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped)
-                else:
-                    v_loss = 0.5 * v_loss_unclipped
-                critic_optimizer.zero_grad()
-                v_loss.backward()
-                clip_grad_norm_(shared_critic.parameters(), args.max_grad_norm)
-                critic_optimizer.step()
+                for agent in env.possible_agents
+            }
+            dones_b = {
+                agent: torch.tensor(
+                    done_batch[agent], dtype=torch.float32, device=device
+                )
+                for agent in env.possible_agents
+            }
+            states = torch.tensor(
+                state_batch, dtype=torch.float32, device=device
+            ).reshape(-1, state_dim)
 
-                # Actor updates per agent
+            # Compute values for all timesteps
+            with torch.no_grad():
+                values = shared_critic.get_value(states).reshape(
+                    args.buffer_size, -1
+                )  # (B, T)
+                next_states = states[1:]  # .reshape(args.buffer_size, -1, state_dim)
+                next_values = torch.cat(
+                    [values[:, 1:], torch.zeros_like(values[:, :1])], dim=1
+                )
+
+            # Compute advantages and returns per agent
+            advantages = {}
+            returns = {}
+            for agent in env.possible_agents:
+                adv, ret = compute_gae(
+                    rews_b[agent].reshape(args.buffer_size, -1),
+                    dones_b[agent].reshape(args.buffer_size, -1),
+                    values,
+                    next_values,
+                    args.gamma,
+                    args.gae_lambda,
+                )
+                if args.norm_adv:
+                    adv = (adv - adv.mean()) / (adv.std(unbiased=False) + 1e-8)
+                advantages[agent] = adv.reshape(-1)
+                returns[agent] = ret.reshape(-1)
+
+            # Prepare old logprobs
+            with torch.no_grad():
+                old_logprobs = {}
                 for i, agent in enumerate(env.possible_agents):
-                    mb_obs = obs_b[agent][mb_idx]
-                    mb_actions = acts_b[agent][mb_idx]
-                    mb_adv = advantages[agent][mb_idx]
-                    mb_oldlog = old_logprobs[agent][mb_idx]
-
-                    logits = agents[i](mb_obs)
+                    logits = agents[i](obs_b[agent])
                     dist = Categorical(logits=logits)
-                    mb_newlog = dist.log_prob(mb_actions)
-                    ratio = torch.exp(mb_newlog - mb_oldlog)
-                    surr1 = ratio * mb_adv
-                    surr2 = (
-                        torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
-                        * mb_adv
+                    old_logprobs[agent] = dist.log_prob(acts_b[agent])
+
+            # Flatten all experiences: already flattened via reshape above
+            total_samples = args.buffer_size * env.max_steps
+            minibatch_size = total_samples // args.num_minibatches
+
+            # KL annealing LR scheduler (if desired)
+            if args.anneal_lr:
+                frac = 1.0 - (global_step / args.total_timesteps)
+                lr_now = args.learning_rate * frac
+                for opt in actor_optimizers + [critic_optimizer]:
+                    for pg in opt.param_groups:
+                        pg["lr"] = lr_now
+
+            for _ in range(args.update_epochs):
+
+                # generate shuffled indices
+                idxs = torch.randperm(total_samples)
+                for start in range(0, total_samples, minibatch_size):
+                    mb_idx = idxs[start : start + minibatch_size]
+                    # Critic update
+                    mb_states = states[mb_idx]
+                    mb_returns = (
+                        torch.stack(
+                            [returns[agent][mb_idx] for agent in env.possible_agents]
+                        )
+                        .mean(dim=0, keepdim=True)
+                        .squeeze()
                     )
-                    p_loss = -torch.min(surr1, surr2).mean()
-                    ent_loss = -args.ent_coef * dist.entropy().mean()
+                    mb_values = shared_critic.get_value(mb_states).squeeze()
+                    v_loss_unclipped = F.mse_loss(mb_values, mb_returns)
+                    if args.clip_vloss:
+                        v_clipped = values.reshape(-1)[mb_idx] + torch.clamp(
+                            mb_values - values.reshape(-1)[mb_idx],
+                            -args.clip_coef,
+                            args.clip_coef,
+                        )
+                        v_loss_clipped = F.mse_loss(v_clipped, mb_returns)
+                        v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped)
+                    else:
+                        v_loss = 0.5 * v_loss_unclipped
+                    critic_optimizer.zero_grad()
+                    v_loss.backward()
+                    clip_grad_norm_(shared_critic.parameters(), args.max_grad_norm)
+                    critic_optimizer.step()
 
-                    actor_optimizers[i].zero_grad()
-                    (p_loss + ent_loss).backward()
-                    clip_grad_norm_(agents[i].parameters(), args.max_grad_norm)
-                    actor_optimizers[i].step()
+                    # Actor updates per agent
+                    for i, agent in enumerate(env.possible_agents):
+                        mb_obs = obs_b[agent][mb_idx]
+                        mb_actions = acts_b[agent][mb_idx]
+                        mb_adv = advantages[agent][mb_idx]
+                        mb_oldlog = old_logprobs[agent][mb_idx]
 
-        # Log metrics
-        writer.add_scalar("loss/value_loss", v_loss.item(), global_step)
-        writer.add_scalar("loss/policy_loss", p_loss.item(), global_step)
-        writer.add_scalar("loss/entropy_loss", ent_loss.item(), global_step)
+                        logits = agents[i](mb_obs)
+                        dist = Categorical(logits=logits)
+                        mb_newlog = dist.log_prob(mb_actions)
+                        ratio = torch.exp(mb_newlog - mb_oldlog)
+                        surr1 = ratio * mb_adv
+                        surr2 = (
+                            torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
+                            * mb_adv
+                        )
+                        p_loss = -torch.min(surr1, surr2).mean()
+                        ent_loss = -args.ent_coef * dist.entropy().mean()
+
+                        actor_optimizers[i].zero_grad()
+                        (p_loss + ent_loss).backward()
+                        clip_grad_norm_(agents[i].parameters(), args.max_grad_norm)
+                        actor_optimizers[i].step()
+
+            buffer = EpisodicBuffer(env, buffer_size=args.buffer_size)
+            print(f"epoch {time.time() - epoch_time}")
+            # Log metrics
+            logging = time.time()
+            writer.add_scalar("loss/value_loss", v_loss.item(), global_step)
+            writer.add_scalar("loss/policy_loss", p_loss.item(), global_step)
+            writer.add_scalar("loss/entropy_loss", ent_loss.item(), global_step)
+            print(f"logging {time.time() - logging}")
+            filling_buffer = time.time()

@@ -31,7 +31,7 @@ class Args:
     """if toggled, cuda will be enabled by default"""
     track: bool = True
     """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "COGNAC-benchmark"
+    wandb_project_name: str = "COGNAC-benchmark-final"
     """the wandb's project name"""
     wandb_entity: str = None
     """the entity (team) of wandb's project"""
@@ -46,29 +46,29 @@ class Args:
 
     # Algorithm specific arguments
     # Algorithm specific arguments
-    env_id: str = "sysadmin_network"  # "grid_firefighting_graph"
+    env_id: str = "sysadmin_network"  # "binary_consensus"  # "grid_firefighting_graph"
     """the id of the environment"""
     adjacency_matrix_path = os.path.join(
-        os.path.dirname(__file__), "env_assets", "basic_undirected_network_10.npy"
+        os.path.dirname(__file__), "env_assets", "basic_directed_network_100.npy"
     )
     """path to the adjacency matrix for the env - if relevant"""
     additional_env_params = None  # {"max_steps": 100}
     """additionnal params for env instanciation"""
-    total_timesteps: int = 5_000_000
+    total_timesteps: int = 20_000_000
     """total timesteps of the experiments"""
-    learning_rate: float = 5e-4
+    learning_rate: float = 1e-4
     """the learning rate of the optimizer"""
     num_envs: int = 1
     """the number of parallel game environments"""
-    buffer_size: int = 1000
+    buffer_size: int = 1
     """the replay memory buffer size"""
-    gamma: float = 0.99
+    gamma: float = 0.95
     """the discount factor gamma"""
-    tau: float = 1.0
+    tau: float = 0.5
     """the target network update rate"""
     target_network_frequency: int = 20
     """the timesteps it takes to update the target network"""
-    batch_size: int = 16
+    batch_size: int = 32
     """the batch size of sample from the reply memory"""
     start_e: float = 1
     """the starting epsilon for exploration"""
@@ -398,7 +398,6 @@ if __name__ == "__main__":
         )
         for agent in env.possible_agents
     ]
-
     agents = [
         {
             "q_network": QNetwork(
@@ -437,6 +436,7 @@ if __name__ == "__main__":
     last_joint_act = {agent_i: 0 for agent_i in env.possible_agents}
     state = env.state().flatten()
     episodic_return = 0
+    filling_buffer = time.time()
     for global_step in range(args.total_timesteps):
         # ALGO LOGIC: put action logic here
         epsilon = linear_schedule(
@@ -495,8 +495,10 @@ if __name__ == "__main__":
         if (
             buffer.full
             and (any(terminations.values()) or any(truncations.values()))
-            and lr_update_cnt % args.train_frequency == 0
+            # and lr_update_cnt % args.train_frequency == 0
         ):
+            print(f"filling_buffer {time.time() - filling_buffer}")
+            training = time.time()
             # 1. Sample a batch of full episodes
             obs_batch, next_obs_batch, act_batch, rew_batch, done_batch, state_batch = (
                 buffer.sample(args.batch_size)
@@ -512,6 +514,7 @@ if __name__ == "__main__":
             # Prepare per-agent tensors
             q_values = []
             target_q_values = []
+            loop_agent = time.time()
             for i, agent_dict in enumerate(agents):
                 # obs: (batch, T, obs_dim)
                 obs = torch.tensor(
@@ -583,7 +586,7 @@ if __name__ == "__main__":
 
                 q_values.append(q_sa_seq.view(-1))  # Flatten to (B*T,)
                 target_q_values.append(q_next_seq.view(-1))  # Flatten to (B*T,)
-
+            print(f"loop agent {time.time()-loop_agent}")
             # Stack per-agent: → (batch*T, num_agents)
             q_values = torch.stack(q_values, dim=1)
             target_q_values = torch.stack(target_q_values, dim=1)
@@ -650,3 +653,5 @@ if __name__ == "__main__":
 
                 soft_update(target_qmixer, qmixer, args.tau)
             lr_update_cnt += 1
+            print(f"training {time.time()-training}")
+            filling_buffer = time.time()
