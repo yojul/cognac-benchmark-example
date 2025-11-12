@@ -412,9 +412,14 @@ class PPOTrainer:
         # Parameter sharing: single actor used for all agents
         self.critic = Critic(self.agg_dim, self.cfg["value_hidden"]).to(self.device)
         self.agg = InfoAggregatorGraph(self.obs_dim, self.agg_dim).to(self.device)
-        self.optimizer = optim.Adam(self.actor.parameters(), lr=self.cfg["lr"])
+
+        self.optimizer = optim.Adam(
+            list(self.actor.parameters()) + list(self.agg.parameters()),
+            lr=self.cfg["lr"],
+        )
         self.critic_optimizer = optim.Adam(
-            self.critic.parameters(), lr=self.cfg["critic_lr"]
+            list(self.critic.parameters()) + list(self.agg.parameters()),
+            lr=self.cfg["critic_lr"],
         )
 
     def select_actions(self, obs_dict):
@@ -662,7 +667,7 @@ def main():
         }
     )
     set_seed(cfg["seed"])
-    ADJ = "basic_directed_network_1000.npy"
+    ADJ = "basic_directed_network_100.npy"
     run_name = f"InforMARL_shared_{ADJ}_{time.time()}"
     writer = SummaryWriter(f"runs/{run_name}")
     adjacency_matrix_path = os.path.join(os.path.dirname(__file__), "env_assets", ADJ)
